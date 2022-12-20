@@ -85,9 +85,8 @@ func ProcessWebhook(plexChan chan<- models.PlexWebhookPayload, vip *viper.Viper)
 
 // does plex send stop if you exit with back button? - Yes, with X for mobile player as well
 func mediaStop(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassistant.HomeAssistantClient, payload models.PlexWebhookPayload) {
-	if vip.GetBool("homeAssistant.triggerLightsOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		changeLight(vip, "on")
-	}
+
+	changeLight(vip, "on")
 
 	if vip.GetBool("ezbeq.enabled") {
 		err := beqClient.UnloadBeqProfile(vip.GetBool("ezbeq.dryRun"))
@@ -103,12 +102,10 @@ func mediaStop(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassis
 	}
 }
 // TODO: add madvr flags
-// TODO: simplify logic? Maybe add the flag checks wihtin the functions to reduce clutter
 // pause only happens with literally pausing
 func mediaPause(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassistant.HomeAssistantClient, payload models.PlexWebhookPayload) {
-	if vip.GetBool("homeAssistant.triggerLightsOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeLight(vip, "on")
-	}
+	
+	go changeLight(vip, "on")
 
 	if vip.GetBool("ezbeq.enabled") {
 		err := beqClient.UnloadBeqProfile(vip.GetBool("ezbeq.dryRun"))
@@ -126,16 +123,12 @@ func mediaPause(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassi
 
 // play is both the "resume" button and play
 func mediaPlay(client *plex.PlexClient, vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassistant.HomeAssistantClient, payload models.PlexWebhookPayload, mediaType string, codec string, edition string) {
-	if vip.GetBool("homeAssistant.triggerLightsOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeLight(vip, "off")
-	}
-	// adjust aspect if configured
-	if vip.GetBool("homeAssistant.triggerAspectRatioChangeOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeAspect(client, payload, vip)
-	}
-	if vip.GetBool("homeAssistant.triggerAvrMasterVolumeChangeOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeMasterVolume(vip, mediaType)
-	}
+	go changeLight(vip, "off")
+
+	go changeAspect(client, payload, vip)
+	
+	go changeMasterVolume(vip, mediaType)
+
 	if vip.GetBool("ezbeq.enabled") {
 		if payload.Metadata.Type == showItemTitle {
 			// if its a show and you dont want beq enabled, exit
@@ -168,14 +161,9 @@ func mediaPlay(client *plex.PlexClient, vip *viper.Viper, beqClient *ezbeq.BeqCl
 
 // resume is only after pausing as long as the media item is still active
 func mediaResume(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeassistant.HomeAssistantClient, payload models.PlexWebhookPayload, mediaType string, codec string, edition string) {
-	// cache the loaded profile so we dont have to search again
 	// trigger lights
-	if vip.GetBool("homeAssistant.triggerLightsOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeLight(vip, "off")
-	}
-	if vip.GetBool("homeAssistant.triggerAvrMasterVolumeChangeOnEvent") && vip.GetBool("homeAssistant.enabled") {
-		go changeMasterVolume(vip, mediaType)
-	}
+	go changeLight(vip, "off")
+	go changeMasterVolume(vip, mediaType)
 
 	// allow skipping search to save time
 	if vip.GetBool("ezbeq.enabled") {
@@ -185,6 +173,7 @@ func mediaResume(vip *viper.Viper, beqClient *ezbeq.BeqClient, haClient *homeass
 			}
 		}
 		tmdb := getPlexMovieDb(payload)
+		// use the cached profile inside the client
 		err := beqClient.LoadBeqProfile(tmdb, payload.Metadata.Year, codec, true, beqClient.CurrentProfile, beqClient.MasterVolume, vip.GetBool("ezbeq.dryRun"), vip.GetString("ezbeq.preferredAuthor"), edition)
 		if err != nil {
 			log.Error(err)
@@ -321,58 +310,64 @@ func getPlexMovieDb(payload models.PlexWebhookPayload) string {
 
 // will change aspect ratio
 func changeAspect(client *plex.PlexClient, payload models.PlexWebhookPayload, vip *viper.Viper) {
-	log.Debug("Changing aspect ratio")
-	// lookup aspect based on imdb technical info
-	imdbID := getPlexImdbID(payload)
-	aspect, err := client.GetAspectRatio(payload.Metadata.Title, payload.Metadata.Year, imdbID)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	// handle logic for aspect ratios
-	topic := vip.GetString("mqtt.topicAspectratio")
-	switch {
-	// 2.3 -> 2.4+ scope
-	case aspect >= 2.3:
-		err := mqtt.Publish(vip, []byte("{\"aspect\":\"2.4\"}"), topic)
+	if vip.GetBool("homeAssistant.triggerAspectRatioChangeOnEvent") && vip.GetBool("homeAssistant.enabled") {
+		log.Debug("Changing aspect ratio")
+		// lookup aspect based on imdb technical info
+		imdbID := getPlexImdbID(payload)
+		aspect, err := client.GetAspectRatio(payload.Metadata.Title, payload.Metadata.Year, imdbID)
 		if err != nil {
-			log.Error()
+			log.Error(err)
+			return
 		}
-	// 2.1 -> 2.29
-	case aspect >= 2.1 && aspect < 2.3:
-		err := mqtt.Publish(vip, []byte("{\"aspect\":\"2.2\"}"), topic)
-		if err != nil {
-			log.Error()
-		}
-	// for 1.85 -> 2.1 basically intention is to zoom aspect ratio, not adjust lens IMO
-	case aspect > 1.78 && aspect < 2.1:
-		err := mqtt.Publish(vip, []byte("{\"aspect\":\"1.85\"}"), topic)
-		if err != nil {
-			log.Error()
-		}
-	// for 1.78 -> 16:9
-	default:
-		err := mqtt.Publish(vip, []byte("{\"aspect\":\"1.78\"}"), topic)
-		if err != nil {
-			log.Error()
+		// handle logic for aspect ratios
+		topic := vip.GetString("mqtt.topicAspectratio")
+		switch {
+		// 2.3 -> 2.4+ scope
+		case aspect >= 2.3:
+			err := mqtt.Publish(vip, []byte("{\"aspect\":\"2.4\"}"), topic)
+			if err != nil {
+				log.Error()
+			}
+		// 2.1 -> 2.29
+		case aspect >= 2.1 && aspect < 2.3:
+			err := mqtt.Publish(vip, []byte("{\"aspect\":\"2.2\"}"), topic)
+			if err != nil {
+				log.Error()
+			}
+		// for 1.85 -> 2.1 basically intention is to zoom aspect ratio, not adjust lens IMO
+		case aspect > 1.78 && aspect < 2.1:
+			err := mqtt.Publish(vip, []byte("{\"aspect\":\"1.85\"}"), topic)
+			if err != nil {
+				log.Error()
+			}
+		// for 1.78 -> 16:9
+		default:
+			err := mqtt.Publish(vip, []byte("{\"aspect\":\"1.78\"}"), topic)
+			if err != nil {
+				log.Error()
+			}
 		}
 	}
 }
 
 // trigger HA for MV change per type
 func changeMasterVolume(vip *viper.Viper, mediaType string) {
-	err := mqtt.Publish(vip, []byte(fmt.Sprintf("{\"type\":\"%s\"}", mediaType)), vip.GetString("mqtt.topicVolume"))
-	if err != nil {
-		log.Error()
+	if vip.GetBool("homeAssistant.triggerAvrMasterVolumeChangeOnEvent") && vip.GetBool("homeAssistant.enabled") {
+		err := mqtt.Publish(vip, []byte(fmt.Sprintf("{\"type\":\"%s\"}", mediaType)), vip.GetString("mqtt.topicVolume"))
+		if err != nil {
+			log.Error()
+		}
 	}
 }
 
 // trigger HA for light change given entity and desired state
 func changeLight(vip *viper.Viper, state string) {
-	log.Debug("Changing light")
-	err := mqtt.Publish(vip, []byte(fmt.Sprintf("{\"state\":\"%s\"}", state)), vip.GetString("mqtt.topicLights"))
-	if err != nil {
-		log.Error()
+	if vip.GetBool("homeAssistant.triggerLightsOnEvent") && vip.GetBool("homeAssistant.enabled") {
+		log.Debug("Changing light")
+		err := mqtt.Publish(vip, []byte(fmt.Sprintf("{\"state\":\"%s\"}", state)), vip.GetString("mqtt.topicLights"))
+		if err != nil {
+			log.Error()
+		}
 	}
 }
 

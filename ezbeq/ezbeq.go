@@ -193,7 +193,6 @@ func (c *BeqClient) searchCatalog(tmdb string, year int, codec string, preferred
 		// if we find a match, return it. Much easier to match on tmdb since plex provides it also
 		if val.MovieDbID == tmdb && val.Year == year && val.AudioTypes[0] == codec {
 			// check edition
-			// TODO: verify wiht the old guard f9bb40bed45c6e7bb2e2cdacd31e6aed3837ee23ffdfaef4c045113beec44c5d
 			if checkEdition(val, edition) {
 				return payload[key], nil
 			} else {
@@ -277,7 +276,7 @@ func (c *BeqClient) LoadBeqProfile(tmdb string, year int, codec string, skipSear
 		return err
 	}
 
-	// save the current stuff for later
+	// save the current stuff for resuming
 	c.CurrentMasterVolume = mvAdjust
 	c.CurrentProfile = entryID
 
